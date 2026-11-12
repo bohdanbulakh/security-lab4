@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="uk">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Auth0 Login</title>
+    <style>
+        html { height: 100%; }
+
+        body {
+            min-height: 100%;
+            margin: 0;
+            font-family: Arial, Helvetica, sans-serif;
+            display: grid;
+            justify-items: center;
+            align-items: center;
+            background-color: #3a3a3a;
+        }
+
+        #main-holder {
+            width: min(520px, calc(100% - 32px));
+            box-sizing: border-box;
+            padding: 32px;
+            margin: 24px 0;
+            background-color: white;
+            border-radius: 7px;
+            box-shadow: 0 0 5px 2px black;
+        }
+
+        h1 { text-align: center; margin-top: 0; }
+
+        .tabs { display: flex; gap: 8px; margin-bottom: 20px; }
+
+        .tabs button {
+            flex: 1;
+            padding: 8px;
+            border: 1px solid #3a3a3a;
+            border-radius: 5px;
+            background: white;
+            cursor: pointer;
+        }
+
+        .tabs button.active { background: #3a3a3a; color: white; }
+
+        form { display: grid; gap: 10px; }
+
+        .field {
+            border: none;
+            border-bottom: 1px solid #3a3a3a;
+            border-radius: 3px;
+            outline: none;
+            padding: 6px 5px;
+            font-size: 14px;
+        }
+
+        .btn {
+            width: 100%;
+            padding: 8px;
+            border: none;
+            border-radius: 5px;
+            color: white;
+            font-weight: bold;
+            background-color: #3a3a3a;
+            cursor: pointer;
+        }
+
+        .btn.secondary { background: white; color: #3a3a3a; border: 1px solid #3a3a3a; }
+
+        .msg {
+            margin: 12px 0 0;
+            padding: 6px;
+            font-size: 13px;
+            font-weight: bold;
+            border-radius: 3px;
+            display: none;
+        }
+
+        .msg.error { display: block; color: #8a0000; border: 1px solid #8a0000; background: #e58f8f; }
+        .msg.ok { display: block; color: #0b5a1c; border: 1px solid #0b5a1c; background: #a6e0b2; }
+
+        .hidden { display: none !important; }
+
+        dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 12px; font-size: 14px; }
+        dt { font-weight: bold; }
+        dd { margin: 0; word-break: break-all; }
+
+        textarea {
+            width: 100%;
+            box-sizing: border-box;
+            height: 90px;
+            font-family: monospace;
+            font-size: 11px;
+            resize: vertical;
+        }
+
+        .actions { display: flex; gap: 8px; margin-top: 12px; }
+    </style>
+</head>
+
+<body>
+<main id="main-holder">
+    <!-- Неавторизований стан -->
+    <section id="guest">
+        <h1>Auth0</h1>
+        <div class="tabs">
+            <button type="button" data-tab="login" class="active">Вхід</button>
+            <button type="button" data-tab="register">Реєстрація</button>
+        </div>
+
+        <form id="login-form">
+            <input type="text" name="login" class="field" placeholder="Email" autocomplete="username" required>
+            <input type="password" name="password" class="field" placeholder="Password" autocomplete="current-password" required>
+            <button type="submit" class="btn">Login</button>
+        </form>
+
+        <form id="register-form" class="hidden">
+            <input type="text" name="name" class="field" placeholder="Name (optional)">
+            <input type="email" name="email" class="field" placeholder="Email" autocomplete="username" required>
+            <input type="password" name="password" class="field" placeholder="Password" autocomplete="new-password" required>
+            <button type="submit" class="btn">Create user</button>
+        </form>
+
+        <p id="guest-msg" class="msg"></p>
+    </section>
+
+    <!-- Авторизований стан -->
+    <section id="profile" class="hidden">
+        <h1 id="hello"></h1>
+        <dl>
+            <dt>user_id</dt><dd id="user-sub"></dd>
+            <dt>email</dt><dd id="user-email"></dd>
+            <dt>Токен дійсний ще</dt><dd id="expires-in"></dd>
+            <dt>Оновлення за</dt><dd id="threshold"></dd>
+            <dt>Refresh token</dt><dd id="has-refresh"></dd>
+            <dt>Оновлень</dt><dd id="refresh-count"></dd>
+        </dl>
+        <label for="access-token"><b>access_token</b></label>
+        <textarea id="access-token" readonly></textarea>
+        <div class="actions">
+            <button type="button" id="refresh-btn" class="btn secondary">Refresh now</button>
+            <button type="button" id="logout-btn" class="btn">Logout</button>
+        </div>
+        <p id="profile-msg" class="msg"></p>
+    </section>
+</main>
+
+<script>
+    const $ = (id) => document.getElementById(id);
+    const STORAGE_KEY = 'session';
+
+    function getToken() {
+        try {
+            return JSON.parse(sessionStorage.getItem(STORAGE_KEY)).token;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    async function api(method, url, data) {
+        const headers = { 'Content-Type': 'application/json' };
+        const token = getToken();
+        if (token) headers.Authorization = token;
+
+        const response = await fetch(url, {
+            method,
+            headers,
+            body: data ? JSON.stringify(data) : undefined,
+        });
+        const body = response.status === 204 ? {} : await response.json().catch(() => ({}));
+        if (!response.ok) {
+            const error = new Error(body.error || `HTTP ${response.status}`);
+            error.status = response.status;
+            throw error;
+        }
+        return body;
+    }
+
+    function showMsg(el, text, kind) {
+        el.textContent = text;
+        el.className = `msg ${kind}`;
+    }
+
+    function formatSeconds(total) {
+        if (total <= 0) return 'expired';
+        const h = Math.floor(total / 3600);
+        const m = Math.floor((total % 3600) / 60);
+        const s = total % 60;
+        return [h && `${h} год`, (h || m) && `${m} хв`, `${s} с`].filter(Boolean).join(' ');
+    }
+
+    // ---- tabs
+
+    document.querySelectorAll('.tabs button').forEach((button) => {
+        button.addEventListener('click', () => {
+            document.querySelectorAll('.tabs button').forEach((b) => b.classList.toggle('active', b === button));
+            $('login-form').classList.toggle('hidden', button.dataset.tab !== 'login');
+            $('register-form').classList.toggle('hidden', button.dataset.tab !== 'register');
+            $('guest-msg').className = 'msg';
+        });
+    });
+
+    // ---- login / register
+
+    $('login-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const form = e.target;
+        try {
+            const data = await api('POST', '/api/login', {
+                login: form.login.value,
+                password: form.password.value,
+            });
+            sessionStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+            form.reset();
+            loadProfile();
+        } catch (err) {
+            showMsg($('guest-msg'), err.message, 'error');
+        }
+    });
+
+    $('register-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const form = e.target;
+        try {
+            const user = await api('POST', '/api/register', {
+                name: form.name.value || undefined,
+                email: form.email.value,
+                password: form.password.value,
+            });
+            showMsg($('guest-msg'), `Користувача ${user.email} створено (${user.user_id}). Тепер можна увійти.`, 'ok');
+            $('login-form').login.value = user.email;
+            form.reset();
+        } catch (err) {
+            showMsg($('guest-msg'), err.message, 'error');
+        }
+    });
+
+    // ---- profile
+
+    let tokenState = null;
+    let ticker = null;
+
+    function renderToken() {
+        if (!tokenState) return;
+        const left = tokenState.expiresAt - Math.floor(Date.now() / 1000);
+        $('expires-in').textContent = formatSeconds(left);
+        $('threshold').textContent = `${tokenState.refreshThreshold} с до завершення`;
+        $('has-refresh').textContent = tokenState.hasRefreshToken ? 'є' : 'немає';
+        $('refresh-count').textContent = tokenState.lastRefreshAt
+            ? `${tokenState.refreshCount} (останнє: ${new Date(tokenState.lastRefreshAt * 1000).toLocaleTimeString()})`
+            : String(tokenState.refreshCount);
+        $('access-token').value = tokenState.accessToken;
+
+        // Коли токен близький до завершення, звертаємось до сервера - він сам оновить його через refresh token
+        if (left <= tokenState.refreshThreshold && !renderToken.pending) {
+            renderToken.pending = true;
+            loadProfile().finally(() => { renderToken.pending = false; });
+        }
+    }
+
+    function showGuest(message) {
+        clearInterval(ticker);
+        tokenState = null;
+        sessionStorage.removeItem(STORAGE_KEY);
+        $('profile').classList.add('hidden');
+        $('guest').classList.remove('hidden');
+        if (message) showMsg($('guest-msg'), message, 'error');
+    }
+
+    async function loadProfile() {
+        try {
+            const me = await api('GET', '/api/me');
+            $('hello').textContent = `Hello ${me.username}`;
+            $('user-sub').textContent = me.user.sub || '-';
+            $('user-email').textContent = me.user.email || '-';
+            tokenState = me.token;
+
+            $('guest').classList.add('hidden');
+            $('profile').classList.remove('hidden');
+            clearInterval(ticker);
+            ticker = setInterval(renderToken, 1000);
+            renderToken();
+        } catch (err) {
+            showGuest(err.status === 401 && getToken() ? err.message : null);
+        }
+    }
+
+    $('refresh-btn').addEventListener('click', async () => {
+        try {
+            const data = await api('POST', '/api/refresh');
+            tokenState = data.token;
+            renderToken();
+            showMsg($('profile-msg'), 'Токен оновлено через refresh_token grant', 'ok');
+        } catch (err) {
+            showMsg($('profile-msg'), err.message, 'error');
+        }
+    });
+
+    $('logout-btn').addEventListener('click', async () => {
+        await api('POST', '/api/logout').catch(() => {});
+        showGuest();
+    });
+
+    if (getToken()) loadProfile();
+</script>
+</body>
+</html>
